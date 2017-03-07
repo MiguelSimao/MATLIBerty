@@ -3,32 +3,39 @@ classdef Liberty < handle
     %   Detailed explanation goes here
     
     properties
-        serial_port
-        serial_obj
-        message_size = 48 * 5 %48 bytes per sentence,
-        timestamper = tic
+        port
+        hemisphere_zenith = [0,-1,0]
     end
     
-    
     properties (SetAccess = protected)
-        data = zeros(8,1000)
+        serial_obj
+        sentence_size
+        frames_per_cycle
+        data1 = zeros(8,1000)
+        data2 = zeros(8,1000)
+        timestamper = tic
+        
         isStreaming = false
         isConnected = false
         distortionState
     end
+    
     methods
         % Constructor method:
         function this = Liberty(port)
             % port is a string. ex: 'COM14' or '/dev/rfcomm1'
-            
+            this.sentence_size = 48;
+            this.frames_per_cycle = 5;
             serial_obj = serial(port);
             set(serial_obj,'BaudRate',115200,...
                            'BytesAvailableFcnMode','byte',...
-                           'BytesAvailableFcnCount',this.message_size,...
+                           'BytesAvailableFcnCount',this.frames_per_cycle * this.sentence_size,...
                            'Terminator','CR/LF',...
                            'BytesAvailableFcn',@this.serialCallback,...
-                           'InputBufferSize',1024);
+                           'InputBufferSize',2048);
+                       
             this.serial_obj = serial_obj;
+            this.port = port;
 
         end
         function connect(this)
@@ -39,9 +46,13 @@ classdef Liberty < handle
                 error(err.message)
             end
             this.isConnected = true;
+            
             % Configure device
             fwrite(this.serial_obj,['F1' 13]); %binary mode
-            fwrite(this.serial_obj,['O1,11,8,2,4,1' 13]); %output data list
+            %fwrite(this.serial_obj,['O*,2,4,1' 13]); %output data list
+            fwrite(this.serial_obj,['O*,11,8,2,4,1' 13]);
+            % set hemisphere
+            fwrite(this.serial_obj,['H*,0,-1,0' 13]);
             fwrite(this.serial_obj,['R3' 13]); %rate 120 Hz
             fwrite(this.serial_obj,['U1' 13]); %metric units
             pause(0.5);
@@ -50,13 +61,14 @@ classdef Liberty < handle
         function stream(this)
             % start stream
             fwrite(this.serial_obj,['C' 13]);
+    
             this.timestamper = tic;
         end
         
         function stop(this)
             % stop stream
-            warning('Function not implemented (low priority).');
-            %fwrite(this.serial_obj,3); % Ctrl+C, break
+            fwrite(this.serial_obj,'P'); % Ctrl+C, break
+            this.isStreaming = false;
         end
         
         function close(this)
@@ -65,8 +77,12 @@ classdef Liberty < handle
             fclose(this.serial_obj);
         end
         function fclose(this)
+            stop(this);
             % overload fclose function
             fclose(this.serial_obj);
+        end
+        function fopen(this)
+            connect(this);
         end
         function serialCallback(this,serialObj,~)
             s = serialObj;
@@ -79,11 +95,10 @@ classdef Liberty < handle
             l = numel(sentence);
 
             % Look for terminator:
-            while l >= 48 % If more than one sample is in the sentence, read them all.
+            while l >= this.sentence_size
+                          % If more than one sample is in the sentence, read them all.
                           % Sample size is 25 bytes incl header and terminator.
-                    
-                % terminator = 0; % NUL
-                % terminator = repmat(terminator,l,1);
+   
                 terminator = [13 10];
                 terminator = repmat(terminator,l,1);
 
@@ -101,7 +116,7 @@ classdef Liberty < handle
 
                 output = sentence(1:pos-1);
 
-                if pos + 1 < 42 % Incomplete message, read next sentence
+                if pos + 1 < 42 % Incomplete message, read next sentencetypecast(
                     sentence = sentence(pos+2:end);
                     s.UserData = sentence; % save rest
                     break;
@@ -109,16 +124,19 @@ classdef Liberty < handle
 
                 % Set stream flag
                 this.isStreaming = (output(4)==67); % byte 4 == 'C' during ocntinuous stream
-
+                stationNumber = sentence(3);
                 newsample = zeros(8,1);
                 newsample(1) = round(toc(this.timestamper)*1000);
                 newsample(2) = typecast(uint8(output(13:16)),'uint32');
                 newsample(3:8) = typecast(uint8(output(17:40)),'single');
-
-                % Circular Buffer
-                this.data = [newsample this.data(:,1:end-1)];
                 
-                % fprintf('%.4f ',handles.Ldata(3:end,1)); fprintf('\n');
+                % Circular Buffer
+                if stationNumber == 1
+                    this.data1 = [newsample this.data1(:,1:end-1)];
+                elseif stationNumber == 2
+                    this.data2 = [newsample this.data2(:,1:end-1)];
+                end
+                
                 sentence = sentence(pos+2:end);
 
                 l = numel(sentence);
