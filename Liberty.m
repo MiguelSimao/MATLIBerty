@@ -11,8 +11,8 @@ classdef Liberty < handle
         serial_obj
         sentence_size = 52
         frames_per_cycle = 10
-        data1 = zeros(8,1000)
-        data2 = zeros(8,1000)
+        data1 = zeros(9,1000)
+        data2 = zeros(9,1000)
         timestamper = tic
         
         isStreaming = false
@@ -128,7 +128,7 @@ classdef Liberty < handle
                 newsample = zeros(8,1);
                 newsample(1) = round(toc(this.timestamper)*1000);
                 newsample(2) = typecast(uint8(output(13:16)),'uint32');
-                newsample(3:8) = typecast(uint8(output(17:40)),'single');
+                newsample(3:9) = typecast(uint8(output(17:44)),'single');
                 
                 % Circular Buffer
                 if stationNumber == 1
