@@ -115,17 +115,18 @@ classdef Liberty < handle
                     break; end
 
                 output = sentence(1:pos-1);
-
-                if pos + 1 < 42 % Incomplete message, read next sentencetypecast(
+                
+                % Deal with incomplete messages, read next
+                if pos + 1 < this.sentence_size-8
                     sentence = sentence(pos+2:end);
-                    s.UserData = sentence; % save rest
+                    s.UserData = sentence; % save leftovers
                     break;
                 end
 
                 % Set stream flag
-                this.isStreaming = (output(4)==67); % byte 4 == 'C' during ocntinuous stream
+                this.isStreaming = (output(4)==67); % byte 4 == 'C' during continuous stream
                 stationNumber = sentence(3);
-                newsample = zeros(8,1);
+                newsample = zeros(9,1);
                 newsample(1) = round(toc(this.timestamper)*1000);
                 newsample(2) = typecast(uint8(output(13:16)),'uint32');
                 newsample(3:9) = typecast(uint8(output(17:44)),'single');
