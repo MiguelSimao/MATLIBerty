@@ -18,6 +18,12 @@ classdef Liberty < handle
         isStreaming = false
         isConnected = false
         distortionState
+        
+    end
+    properties
+        defs = struct('output',11)
+                      
+        
     end
     
     methods
@@ -93,66 +99,75 @@ classdef Liberty < handle
             
             % Sentence size:
             l = numel(sentence);
-
+            
             % Look for terminator:
-            while l >= this.sentence_size
+            %while l >= this.sentence_size
                           % If more than one sample is in the sentence, read them all.
                           % Sample size is 25 bytes incl header and terminator.
-   
-                terminator = [13 10];
-                terminator = repmat(terminator,l,1);
-
-                CR = (terminator(:,1) == sentence);
-                LF = (terminator(:,2) == sentence);
-
-                LF = [LF(2:end); LF(1)]; %shift positions of LF by -1
-
-                pos = find(and(CR,LF),1); %position of the first terminator byte
-                %pos is also the number of bytes since the beggining of the sentence
-                %counting with the first terminator byte
-
-                if isempty(pos)
-                    break; end
-
-                output = sentence(1:pos-1);
-                
-                % Deal with incomplete messages, read next
-                if pos + 1 < this.sentence_size-8
-                    sentence = sentence(pos+2:end);
-                    s.UserData = sentence; % save leftovers
-                    break;
-                end
-
-                % Set stream flag
-                this.isStreaming = (output(4)==67); % byte 4 == 'C' during continuous stream
-                stationNumber = sentence(3);
-                newsample = zeros(9,1);
-                newsample(1) = round(toc(this.timestamper)*1000);
-                newsample(2) = typecast(uint8(output(13:16)),'uint32');
-                newsample(3:9) = typecast(uint8(output(17:44)),'single');
-                
-                % Circular Buffer
-                if stationNumber == 1
-                    this.data1 = [newsample this.data1(:,1:end-1)];
-                elseif stationNumber == 2
-                    this.data2 = [newsample this.data2(:,1:end-1)];
-                end
-                
-                sentence = sentence(pos+2:end);
-
-                l = numel(sentence);
-                s.UserData = sentence;
-
-                % Store unread data
-                s.UserData = sentence;
-
-                % Set stream flag:
-                this.isStreaming = true;
-                
-                % Set distortion state:
-                this.distortionState = typecast(uint8(output(9:12)),'uint32');
-
+            
+            terminator = [13 10];
+            %terminator = repmat(terminator,l,1);
+            
+            % TODO: use: strfind(sentence, terminator)
+            %CR = (terminator(:,1) == sentence);
+            %LF = (terminator(:,2) == sentence);
+            
+            %LF = [LF(2:end); LF(1)]; %shift positions of LF by -1
+            
+            %pos = find(and(CR,LF),1); %position of the first terminator byte
+            pos = strfind(sentence,terminator);
+            output = cell(numel(pos),1);
+            for i=1:numel(pos)-1
+                output{i} = sentence(pos(i):pos(i+1)-1);
             end
+            output{end} = sentence(pos(end):end);
+            
+            
+            %pos is also the number of bytes since the beggining of the sentence
+            %counting with the first terminator byte
+
+            %if isempty(pos)
+            %    break; end
+
+            %output = sentence(1:pos-1);
+
+            % Deal with incomplete messages, read next
+            if pos + 1 < this.sentence_size-8
+                sentence = sentence(pos+2:end);
+                s.UserData = sentence; % save leftovers
+                break;
+            end
+
+            % Set stream flag
+            this.isStreaming = (output(4)==67); % byte 4 == 'C' during continuous stream
+            stationNumber = sentence(3);
+            newsample = zeros(9,1);
+            newsample(1) = round(toc(this.timestamper)*1000);
+            newsample(2) = typecast(uint8(output(13:16)),'uint32');
+            newsample(3:9) = typecast(uint8(output(17:44)),'single');
+
+            % Circular Buffer
+            if stationNumber == 1
+                this.data1 = [newsample this.data1(:,1:end-1)];
+            elseif stationNumber == 2
+                this.data2 = [newsample this.data2(:,1:end-1)];
+            end
+
+            sentence = sentence(pos+2:end);
+
+            l = numel(sentence);
+            s.UserData = sentence;
+
+            % Store unread data
+            s.UserData = sentence;
+
+            % Set stream flag:
+            this.isStreaming = true;
+
+            % Set distortion state:
+            this.distortionState = typecast(uint8(output(9:12)),'uint32');
+
+            %end
         end
     end
     
