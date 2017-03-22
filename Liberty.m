@@ -192,6 +192,12 @@ classdef Liberty < handle
             elseif stationNumber == 2
                 this.data2 = [newsamples this.data2(:,1:end-1)];
             end
+            
+            if this.verbose
+                fprintf('Station 1: |'); 
+                fprintf('| % 3.1f ',this.data1(1,:));
+                fprintf('\n');
+            end
 
 %             sentence = sentence(pos+2:end);
 % 
