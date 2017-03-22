@@ -9,7 +9,7 @@ classdef Liberty < handle
     properties (SetAccess = protected)
         port
         serial_obj
-        sentence_size
+        sentence_size = 22
         outputlist = {'pos_xyz'}
                   
         verbose = true
@@ -66,7 +66,7 @@ classdef Liberty < handle
             serial_obj = serial(port);
             set(serial_obj,'BaudRate',115200,...
                            'BytesAvailableFcnMode','byte',...
-                           'BytesAvailableFcnCount',1,...
+                           'BytesAvailableFcnCount',22,...
                            'Terminator','CR/LF',...
                            'BytesAvailableFcn',@this.serialCallback,...
                            'InputBufferSize',2048);
@@ -104,7 +104,7 @@ classdef Liberty < handle
             
             pause(0.5);
             
-            this.sentence_size = 8 + sum(cellfun(@(x)defssize.(x),outputlist));
+            this.sentence_size = 8 + sum(cellfun(@(x)defssize.(x),outputlist)) + 2;
         end
         
         function stream(this)
@@ -136,15 +136,16 @@ classdef Liberty < handle
         function serialCallback(this,serialObj,~)
             s = serialObj;
             
-            sentence = [s.UserData ; ...
-                        fread(s,s.BytesAvailableFcnCount)];
+            sentence = [s.UserData  fread(s,s.BytesAvailableFcnCount)'];
             %s.UserData has the remaining bytes of the previous cycle
             
             terminator = [13 10];
             
+            assignin('base','sentence',sentence);
+            
             % Find message headers:
             pos = strfind(sentence,this.header);
-            
+            assignin('base','pos',pos);
             % Divide incoming message into a cell (array of strings):
             output = cell(numel(pos),1);
             for i=1:numel(pos)-1
@@ -155,18 +156,21 @@ classdef Liberty < handle
             % Get size of each sentence:
             actual_size = cellfun(@numel,output);
             % expected_size = 0;
-            
+            assignin('base','output',output);
             % Save last sentence if incomplete
-            if actual_size(end) < this.sentence_size
+            if actual_size(end) < this.sentence_size-2
                 s.UserData = output{end};
                 output = output(1:end-1);
+                this.incompleteSamples = this.incompleteSamples - 1;
             end
             
             % Find and remove incomplete messages:
-            this.incompleteSamples = this.incompleteSamples + sum(actual_size ~= this.sentence_size);
-            output = output(actual_size == this.sentence_size);
+            this.incompleteSamples = this.incompleteSamples + sum(actual_size ~= (this.sentence_size-2));
+            
+            output = output(actual_size == (this.sentence_size-2));
             
             output = cell2mat(output);
+            
             
             % Set stream flag
             this.isStreaming = (output(end,4)==67); % byte 4 == 'C' during continuous stream
@@ -176,27 +180,36 @@ classdef Liberty < handle
             
             
             % FOR TESTING ONLY: XYZ
-            output = output(:,9:20)';
+            output = output';
             n = size(output,2); % number of messages
             newsamples = typecast(uint8(output(:)),'single');
-            newsamples = reshape(newsamples,[],n)';
+            newsamples = reshape(newsamples,[],n);
 %             newsamples = typecast(uint8(output(17:44)),'single');
 %             newsamples = zeros(3,1);
 %             newsamples(1) = round(toc(this.timestamper)*1000);
 %             newsamples(2) = typecast(uint8(output(13:16)),'uint32');
 %             newsamples(3:9) = typecast(uint8(output(17:44)),'single');
-
+            assignin('base','stationNumber',stationNumber);
+            
+         
+            
             % Circular Buffer
-            if stationNumber == 1
-                this.data1 = [newsamples this.data1(:,1:end-1)];
-            elseif stationNumber == 2
-                this.data2 = [newsamples this.data2(:,1:end-1)];
-            end
+            ind1 = stationNumber==1;
+            ind2 = stationNumber==2;
+            newsamples1 = newsamples(:,ind1);
+            newsamples2 = newsamples(:,ind2);
+
+            this.data1 = [newsamples1 this.data1(:,1:end-numel(ind1))];
+
+            n2 = size(newsamples2,2);
+            this.data2 = [newsamples2 this.data2(:,1:end-numel(ind2))];
+            
+            
             
             if this.verbose
-                fprintf('Station 1: |'); 
-                fprintf('| % 3.1f ',this.data1(1,:));
-                fprintf('\n');
+                fprintf('Station 2 |'); 
+                fprintf('| % 3.1f ',this.data2(:,1));
+                fprintf('||\n');
             end
 
 %             sentence = sentence(pos+2:end);
