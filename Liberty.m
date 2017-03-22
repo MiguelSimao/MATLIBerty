@@ -9,21 +9,53 @@ classdef Liberty < handle
     properties (SetAccess = protected)
         port
         serial_obj
-        sentence_size = 52
+        sentence_size
+        outputlist = {'pos_xyz'}
+                  
+        verbose = true
+        
         frames_per_cycle = 10
-        data1 = zeros(9,1000)
-        data2 = zeros(9,1000)
+        
+        data1 = zeros(3,1000)
+        data2 = zeros(3,1000)
         timestamper = tic
         
         isStreaming = false
         isConnected = false
         distortionState
         
-    end
-    properties
-        defs = struct('output',11)
-                      
         
+    end
+    properties (SetAccess = private)
+        incompleteSamples = 0
+        header = uint8('LY')
+        outputdefs = struct('ascii_space','0',...
+                          'ascii_cr','1',...
+                          'pos_xyz','2',...
+                          'pos_xyz_extended','3',...
+                          'ori_euler','4',...
+                          'ori_euler_extended','5',...
+                          'dcm','6',...
+                          'ori_quat','7',...
+                          'timestamp','8',...
+                          'frame_count','9',...
+                          'stylus_flag','10',...
+                          'distortion_level','11',...
+                          'external_sync','12')
+        
+        outputsize = struct('ascii_space',1,...
+                          'ascii_cr',1,...
+                          'pos_xyz',3*4,...
+                          'pos_xyz_extended',3*4,...
+                          'ori_euler',3*4,...
+                          'ori_euler_extended',3*4,...
+                          'dcm',3*3*4,...
+                          'ori_quat',4*4,...
+                          'timestamp',12,...
+                          'frame_count',12,...
+                          'stylus_flag',4,...
+                          'distortion_level',4,...
+                          'external_sync',4)
     end
     
     methods
@@ -44,6 +76,7 @@ classdef Liberty < handle
 
         end
         function connect(this)
+            
             % Configure serial connection:
             this.serial_obj.BytesAvailableFcnCount = this.frames_per_cycle * this.sentence_size;
             % Connect device:
@@ -54,21 +87,31 @@ classdef Liberty < handle
             end
             this.isConnected = true;
             
-            % Configure device
+            % Configure device:
             fwrite(this.serial_obj,['F1' 13]); %binary mode
-            % fwrite(this.serial_obj,['O*,11,8,2,4,1' 13]); %output data list
-            fwrite(this.serial_obj,['O*,11,8,2,7,1' 13]); %output data list
             fwrite(this.serial_obj,['H*,0,-1,0' 13]); % set hemisphere zenith (-Y)
             fwrite(this.serial_obj,['R3' 13]); %rate 120 Hz
             fwrite(this.serial_obj,['U1' 13]); %metric units
+            % Set outputs:
+            defs = this.outputdefs;
+            defssize = this.outputsize;
+            
+            outputlist = this.outputlist;
+            strlist = cellfun(@(var)defs.(var),outputlist,'UniformOutput',false);
+            
+            fwrite(this.serial_obj,'O*');
+            fwrite(this.serial_obj,[sprintf(',%s',strlist{:}) 13]);
+            
             pause(0.5);
+            
+            this.sentence_size = 8 + sum(cellfun(@(x)defssize.(x),outputlist));
         end
         
         function stream(this)
+            this.timestamper = tic;
+            
             % start stream
             fwrite(this.serial_obj,['C' 13]);
-    
-            this.timestamper = tic;
         end
         
         function stop(this)
@@ -97,75 +140,72 @@ classdef Liberty < handle
                         fread(s,s.BytesAvailableFcnCount)];
             %s.UserData has the remaining bytes of the previous cycle
             
-            % Sentence size:
-            l = numel(sentence);
-            
-            % Look for terminator:
-            %while l >= this.sentence_size
-                          % If more than one sample is in the sentence, read them all.
-                          % Sample size is 25 bytes incl header and terminator.
-            
             terminator = [13 10];
-            %terminator = repmat(terminator,l,1);
             
-            % TODO: use: strfind(sentence, terminator)
-            %CR = (terminator(:,1) == sentence);
-            %LF = (terminator(:,2) == sentence);
+            % Find message headers:
+            pos = strfind(sentence,this.header);
             
-            %LF = [LF(2:end); LF(1)]; %shift positions of LF by -1
-            
-            %pos = find(and(CR,LF),1); %position of the first terminator byte
-            pos = strfind(sentence,terminator);
+            % Divide incoming message into a cell (array of strings):
             output = cell(numel(pos),1);
             for i=1:numel(pos)-1
                 output{i} = sentence(pos(i):pos(i+1)-1);
             end
             output{end} = sentence(pos(end):end);
             
+            % Get size of each sentence:
+            actual_size = cellfun(@numel,output);
+            % expected_size = 0;
             
-            %pos is also the number of bytes since the beggining of the sentence
-            %counting with the first terminator byte
-
-            %if isempty(pos)
-            %    break; end
-
-            %output = sentence(1:pos-1);
-
-            % Deal with incomplete messages, read next
-            if pos + 1 < this.sentence_size-8
-                sentence = sentence(pos+2:end);
-                s.UserData = sentence; % save leftovers
-                break;
+            % Save last sentence if incomplete
+            if actual_size(end) < this.sentence_size
+                s.UserData = output{end};
+                output = output(1:end-1);
             end
-
+            
+            % Find and remove incomplete messages:
+            this.incompleteSamples = this.incompleteSamples + sum(actual_size ~= this.sentence_size);
+            output = output(actual_size == this.sentence_size);
+            
+            output = cell2mat(output);
+            
             % Set stream flag
-            this.isStreaming = (output(4)==67); % byte 4 == 'C' during continuous stream
-            stationNumber = sentence(3);
-            newsample = zeros(9,1);
-            newsample(1) = round(toc(this.timestamper)*1000);
-            newsample(2) = typecast(uint8(output(13:16)),'uint32');
-            newsample(3:9) = typecast(uint8(output(17:44)),'single');
+            this.isStreaming = (output(end,4)==67); % byte 4 == 'C' during continuous stream
+            
+            stationNumber = output(:,3);
+            output = output(:,9:end);
+            
+            
+            % FOR TESTING ONLY: XYZ
+            output = output(:,9:20)';
+            n = size(output,2); % number of messages
+            newsamples = typecast(uint8(output(:)),'single');
+            newsamples = reshape(newsamples,[],n)';
+%             newsamples = typecast(uint8(output(17:44)),'single');
+%             newsamples = zeros(3,1);
+%             newsamples(1) = round(toc(this.timestamper)*1000);
+%             newsamples(2) = typecast(uint8(output(13:16)),'uint32');
+%             newsamples(3:9) = typecast(uint8(output(17:44)),'single');
 
             % Circular Buffer
             if stationNumber == 1
-                this.data1 = [newsample this.data1(:,1:end-1)];
+                this.data1 = [newsamples this.data1(:,1:end-1)];
             elseif stationNumber == 2
-                this.data2 = [newsample this.data2(:,1:end-1)];
+                this.data2 = [newsamples this.data2(:,1:end-1)];
             end
 
-            sentence = sentence(pos+2:end);
-
-            l = numel(sentence);
-            s.UserData = sentence;
-
-            % Store unread data
-            s.UserData = sentence;
-
-            % Set stream flag:
-            this.isStreaming = true;
-
-            % Set distortion state:
-            this.distortionState = typecast(uint8(output(9:12)),'uint32');
+%             sentence = sentence(pos+2:end);
+% 
+%             l = numel(sentence);
+%             s.UserData = sentence;
+% 
+%             % Store unread data
+%             s.UserData = sentence;
+% 
+%             % Set stream flag:
+%             this.isStreaming = true;
+% 
+%             % Set distortion state:
+%             this.distortionState = typecast(uint8(output(9:12)),'uint32');
 
             %end
         end
